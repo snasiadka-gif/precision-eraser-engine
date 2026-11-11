@@ -1,0 +1,32 @@
+name: Precision Matting Cloud Test (macOS-14 Apple Silicon)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test-matting:
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Precompile CoreML MODNet Model
+        run: |
+          echo "Compiling MODNet.mlmodel with coremlcompiler..."
+          xcrun coremlcompiler compile Sources/MODNet.mlmodel Sources/
+
+      - name: Build and Run Swift Test Harness
+        run: |
+          swift run eraser-test-runner
+
+      - name: Upload Output PNG Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: matting-results
+          path: output/*.png
+          if-no-files-found: error
