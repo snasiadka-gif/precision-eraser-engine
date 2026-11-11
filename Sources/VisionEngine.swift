@@ -1,5 +1,6 @@
 import Vision
 import CoreImage
+import CoreVideo
 import Foundation
 
 final class VisionEngine {
@@ -51,7 +52,10 @@ final class VisionEngine {
             throw PrecisionError.message("No foreground subject found by Apple Vision.")
         }
 
-        let buffer = try observation.generateScaledMaskForImage(forInstances: observation.allInstances, from: handler)
+        let selectedInstances = selectForegroundInstances(from: observation)
+        print(" -> Selected instances for mask: \(Array(selectedInstances).sorted()) out of all: \(Array(observation.allInstances).sorted())")
+
+        let buffer = try observation.generateScaledMaskForImage(forInstances: selectedInstances, from: handler)
         let ciImage = CIImage(cvPixelBuffer: buffer)
         let extent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
 
@@ -60,6 +64,81 @@ final class VisionEngine {
         }
 
         return try grayBytes(gray, width: image.width, height: image.height)
+    }
+
+    private func selectForegroundInstances(from observation: VNInstanceMaskObservation) -> IndexSet {
+        let all = observation.allInstances
+        guard all.count > 1 else { return all }
+
+        let maskBuffer = observation.instanceMask
+        CVPixelBufferLockBaseAddress(maskBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(maskBuffer, .readOnly) }
+
+        let width = CVPixelBufferGetWidth(maskBuffer)
+        let height = CVPixelBufferGetHeight(maskBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(maskBuffer)
+        let format = CVPixelBufferGetPixelFormatType(maskBuffer)
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(maskBuffer) else {
+            return all
+        }
+
+        var instancePixelCounts: [Int: Int] = [:]
+        for inst in all {
+            instancePixelCounts[inst] = 0
+        }
+
+        if format == kCVPixelFormatType_OneComponent8 {
+            let ptr = baseAddress.assumingMemoryBound(to: UInt8.self)
+            for y in 0..<height {
+                let row = ptr.advanced(by: y * bytesPerRow)
+                for x in 0..<width {
+                    let val = Int(row[x])
+                    if val > 0 && instancePixelCounts[val] != nil {
+                        instancePixelCounts[val]! += 1
+                    }
+                }
+            }
+        } else {
+            for inst in all {
+                if let singleMask = try? observation.generateMask(forInstances: IndexSet(integer: inst)) {
+                    CVPixelBufferLockBaseAddress(singleMask, .readOnly)
+                    let sWidth = CVPixelBufferGetWidth(singleMask)
+                    let sHeight = CVPixelBufferGetHeight(singleMask)
+                    let sRow = CVPixelBufferGetBytesPerRow(singleMask)
+                    if let sBase = CVPixelBufferGetBaseAddress(singleMask) {
+                        let sPtr = sBase.assumingMemoryBound(to: UInt8.self)
+                        var count = 0
+                        for y in 0..<sHeight {
+                            let row = sPtr.advanced(by: y * sRow)
+                            for x in 0..<sWidth {
+                                if row[x] > 128 { count += 1 }
+                            }
+                        }
+                        instancePixelCounts[inst] = count
+                    }
+                    CVPixelBufferUnlockBaseAddress(singleMask, .readOnly)
+                }
+            }
+        }
+
+        print(" -> Instance pixel counts: \(instancePixelCounts)")
+        guard let maxEntry = instancePixelCounts.max(by: { $0.value < $1.value }), maxEntry.value > 0 else {
+            return all
+        }
+
+        let maxCount = Double(maxEntry.value)
+        var selected = IndexSet()
+        for (inst, count) in instancePixelCounts {
+            let ratio = Double(count) / maxCount
+            if ratio >= 0.20 {
+                selected.insert(inst)
+            } else {
+                print(" -> Filtered out minor clutter instance #\(inst) (ratio: \(String(format: "%.1f%%", ratio * 100)))")
+            }
+        }
+
+        return selected.isEmpty ? all : selected
     }
 
     private func grayBytes(_ image: CGImage, width: Int, height: Int) throws -> Data {
