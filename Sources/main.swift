@@ -6,8 +6,8 @@ let outputDir = URL(fileURLWithPath: "output")
 try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
 let testImages = [
-    ("dog_test.jpg", "dog"),
-    ("real_hair.jpg", "hair")
+    ("singer_test.jpg", "singer"),
+    ("party_toast_test.jpg", "party_toast")
 ]
 
 print("==================================================")
